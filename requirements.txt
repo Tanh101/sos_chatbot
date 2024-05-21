@@ -6,3 +6,6 @@ openai
 langchain_chroma
 sentence-transformers
 langchain_text_splitters
+uvicorn
+pydantic
+fastapi
