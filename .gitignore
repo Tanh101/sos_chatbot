@@ -1,2 +1,4 @@
 .env
-models/*
+app/models/
+**/__pycache__/
+
