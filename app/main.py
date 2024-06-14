@@ -2,24 +2,21 @@
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import CharacterTextSplitter
-import uuid
-from langchain_community.llms import CTransformers
 from langchain_community.embeddings import GPT4AllEmbeddings
 from langchain.prompts import ChatPromptTemplate
-from langchain.prompts import PromptTemplate
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
 from fastapi import FastAPI
 from pydantic import BaseModel
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
-from langchain.chains import RetrievalQA
-import os
 
 # gemini import
 from langchain_google_genai import ChatGoogleGenerativeAI
 from constants import constants
 from fastapi.middleware.cors import CORSMiddleware
+from langchain.chains.llm import LLMChain
+from langchain.memory import ConversationBufferMemory
+from langchain_core.prompts import PromptTemplate
 
 app = FastAPI()
 origins = [
@@ -72,11 +69,9 @@ file_path = "/home/vantanhly/CodingLife/langchain/sos_chatbot/app/data/test.txt"
 documents = document_loader(filepath=file_path)
 docs = text_splitter(documents=documents)
 
+db = Chroma.from_documents(docs, embedding=embedding_model, persist_directory="./chroma_db")
 
-vectorstore = Chroma.from_documents(
-    docs,
-    embedding=embedding_model,
-)
+vectorstore =  Chroma(persist_directory="./chroma_db", embedding_function=embedding_model)
 
 
 @app.post("/api/conversations")
@@ -113,11 +108,9 @@ async def query_rag_chain(request: QueryRequest):
         | StrOutputParser()
     )
 
-    chain = {
-        "question": rag_chain,
-    } | lmm_chain
-
-    result = chain.invoke({"question": request.query})
+    main_chain = rag_chain | lmm_chain
+    
+    result = main_chain.invoke({"question": request.query})
 
     answer = AnswerResponse(answer=result)
 
