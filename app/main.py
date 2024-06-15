@@ -1,27 +1,23 @@
-# langchain
+# Necessary imports
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from langchain_chroma import Chroma
-from langchain_community.document_loaders import TextLoader
-from langchain_text_splitters import CharacterTextSplitter
+from langchain_community.document_loaders import TextLoader, PyPDFLoader
+from langchain_text_splitters import (
+    CharacterTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
 from langchain_community.embeddings import GPT4AllEmbeddings
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
-from fastapi import FastAPI
-from pydantic import BaseModel
-from fastapi import FastAPI, File, UploadFile, HTTPException
-
-# gemini import
 from langchain_google_genai import ChatGoogleGenerativeAI
 from constants import constants
-from fastapi.middleware.cors import CORSMiddleware
-from langchain.chains.llm import LLMChain
-from langchain.memory import ConversationBufferMemory
-from langchain_core.prompts import PromptTemplate
+import os
 
 app = FastAPI()
-origins = [
-    "*",
-]
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,7 +45,10 @@ class AnswerResponse(BaseModel):
 
 
 def document_loader(filepath: str):
-    loader = TextLoader(filepath)
+    if filepath.endswith(".pdf"):
+        loader = PyPDFLoader(filepath)
+    else:
+        loader = TextLoader(filepath)
     documents = loader.load()
     return documents
 
@@ -60,23 +59,49 @@ def text_splitter(documents):
     return docs
 
 
+def pdf_splitter(documents):
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=50)
+    docs = text_splitter.split_documents(documents)
+    return docs
+
+
 @app.get("/")
 async def read_root():
     return {"message": "Server is running"}
 
 
-file_path = "/home/vantanhly/CodingLife/langchain/sos_chatbot/app/data/test.txt"
-documents = document_loader(filepath=file_path)
-docs = text_splitter(documents=documents)
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    if file.content_type not in ["text/plain", "application/pdf"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Only plain text and PDF files are allowed.",
+        )
 
-db = Chroma.from_documents(docs, embedding=embedding_model, persist_directory="./chroma_db")
+    upload_dir = "./data"
+    os.makedirs(upload_dir, exist_ok=True)
+    file_location = os.path.join(upload_dir, file.filename)
 
-vectorstore =  Chroma(persist_directory="./chroma_db", embedding_function=embedding_model)
+    with open(file_location, "wb+") as file_object:
+        file_object.write(file.file.read())
+
+    documents = document_loader(filepath=file_location)
+
+    if file.content_type == "application/pdf":
+        docs = pdf_splitter(documents=documents)
+    else:
+        docs = text_splitter(documents=documents)
+
+    db = Chroma.from_documents(
+        docs, embedding=embedding_model, persist_directory="./chroma_db"
+    )
+
+    return {"detail": "File uploaded and processed successfully"}
 
 
 @app.post("/api/conversations")
 async def query_rag_chain(request: QueryRequest):
-    template = """You are an assistant for rescue information tasks.
+    template = """You are an assistant for rescue information tasks. if you are not find the answer, you can auto search on the internet.
     Answer in Vietnamese. This is important.
     Question: {question}
     Context: {context}
@@ -95,24 +120,35 @@ async def query_rag_chain(request: QueryRequest):
     lmm_chain = llm_prompt | llm | StrOutputParser()
 
     # retrieval
+    vectorstore = Chroma(
+        persist_directory="./chroma_db", embedding_function=embedding_model
+    )
     retriever = vectorstore.as_retriever()
     prompt = ChatPromptTemplate.from_template(template)
 
-    rag_chain = (
-        {
-            "context": lambda x: retriever.get_relevant_documents(x["question"]),
-            "question": RunnablePassthrough(),
-        }
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
+    relevant_docs = retriever.get_relevant_documents(request.query)
 
-    main_chain = rag_chain | lmm_chain
-    
-    result = main_chain.invoke({"question": request.query})
+    # If no relevant documents are found, use only LLM
+    if not relevant_docs or all(doc.page_content.strip() == "" for doc in relevant_docs):
+        result = lmm_chain.invoke({"question": request.query})
+    else:    
+        rag_chain = (
+            {
+                "context": lambda x: retriever.get_relevant_documents(x["question"]),
+                "question": RunnablePassthrough(),
+            }
+            | prompt
+            | llm
+            | StrOutputParser()
+        )
 
-    answer = AnswerResponse(answer=result)
+        main_chain = rag_chain | lmm_chain
+
+        result = main_chain.invoke({"question": request.query})
+
+    # Format the answer to replace '\n' with actual newlines
+    formatted_answer = result.replace("\\n", "\n")
+    answer = AnswerResponse(answer=formatted_answer)
 
     return {"answer": answer}
 

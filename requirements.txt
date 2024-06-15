@@ -1,8 +1,5 @@
-ctransformers
 langchain
 langchain-community
 gpt4all
-openai
 langchain_chroma
-sentence-transformers
 langchain_text_splitters
