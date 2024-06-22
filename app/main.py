@@ -138,7 +138,7 @@ async def query_rag_chain(request: QueryRequest):
 
     result = rag_chain.invoke({"question": request.query})
 
-    if result == "Tôi không biết":
+    if "không biết" in result:
         result = lmm_chain.invoke({"question": request.query})
 
     # Format the answer to replace '\n' with actual newlines

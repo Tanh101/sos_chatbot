@@ -15,11 +15,7 @@ from langchain.schema.output_parser import StrOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
 from constants import constants
 import os
-
-from langchain.agents import AgentExecutor, Tool, initialize_agent
-from langchain.agents.types import AgentType
 from langchain.chains import RetrievalQA
-from langchain.memory import ConversationBufferMemory
 
 app = FastAPI()
 origins = ["*"]
@@ -35,7 +31,7 @@ app.add_middleware(
 embedding_model = GPT4AllEmbeddings(model_file=constants.embedding_model_file)
 
 llm = ChatGoogleGenerativeAI(
-    model=constants.gg_model_name, google_api_key=constants.gg_api_key, temperature=0.6
+    model="gemini-1.5-flash", google_api_key=constants.gg_api_key, temperature=0.1
 )
 
 vectorstore = None
@@ -106,33 +102,32 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.post("/api/conversations")
 async def query_rag_chain(request: QueryRequest):
-    system_message = """You are an assistant for rescue information tasks. if you are not find the answer, you can auto search on the internet.
+    template = """You are an assistant for rescue information tasks.
     Answer in Vietnamese. This is important.
+    if you don't know the answer, please say "I don't know".
+    Question: {question}
+    Context: {context}
     Answer:
     """
 
-    # system_message = """
-    # "You are the XYZ bot."
-    # "This is conversation with a human. Answer the questions you get based on the knowledge you have."
-    # "If you don't know the answer, you can search the internet."
-    # """
+    llm_template = """You are an assistant for something information.
+    Answer in Vietnamese. This is important.
+    Question: {question}
+    Answer:
+    """
+
+    # only llm
+    llm_prompt = ChatPromptTemplate.from_template(llm_template)
+    lmm_chain = llm_prompt | llm | StrOutputParser()
 
     # retrieval
     vectorstore = Chroma(
         persist_directory="./chroma_db", embedding_function=embedding_model
     )
-
     retriever = vectorstore.as_retriever()
+    prompt = ChatPromptTemplate.from_template(template)
 
-    # only llm
-    memory = ConversationBufferMemory(
-        memory_key="chat_history",
-        input_key="input",
-        return_messages=True,
-        output_key="output",
-    )
-
-    qa = RetrievalQA.from_chain_type(
+    rag_chain = RetrievalQA.from_chain_type(
         llm=llm,
         chain_type="stuff",
         retriever=vectorstore.as_retriever(),
@@ -140,27 +135,11 @@ async def query_rag_chain(request: QueryRequest):
         return_source_documents=True,
     )
 
-    tools = [
-        Tool(
-            name="doc_search_tool",
-            func=qa,
-            description=(
-                "This tool is used to retrieve rescue information"
-            ),
-        )
-    ]
+    result = rag_chain.invoke({"query": request.query})
 
-    agent = initialize_agent(
-        agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
-        tools=tools,
-        llm=llm,
-        memory=memory,
-        return_source_documents=True,
-        return_intermediate_steps=True,
-        agent_kwargs={"system_message": system_message},
-    )
+    if "không biết" in result:
+        result = lmm_chain.invoke({"question": request.query})
 
-    result = agent(request.query)
     # Format the answer to replace '\n' with actual newlines
     
     answer = AnswerResponse(answer=result)
