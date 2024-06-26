@@ -128,7 +128,7 @@ async def query_rag_chain(request: QueryRequest):
 
     rag_chain = (
         {
-            "context": lambda x: retriever.get_relevant_documents(x["question"]),
+            "context": lambda x: retriever.invoke(x["question"]),
             "question": RunnablePassthrough(),
         }
         | prompt
@@ -139,6 +139,9 @@ async def query_rag_chain(request: QueryRequest):
     result = rag_chain.invoke({"question": request.query})
 
     if "không biết" in result:
+        result = lmm_chain.invoke({"question": request.query})
+
+    if "" == result:
         result = lmm_chain.invoke({"question": request.query})
 
     # Format the answer to replace '\n' with actual newlines

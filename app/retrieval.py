@@ -16,6 +16,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from constants import constants
 import os
 from langchain.chains import RetrievalQA
+from langchain.prompts import PromptTemplate
 
 app = FastAPI()
 origins = ["*"]
@@ -55,7 +56,7 @@ def document_loader(filepath: str):
 
 
 def text_splitter(documents):
-    text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=20)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=20)
     docs = text_splitter.split_documents(documents)
     return docs
 
@@ -124,16 +125,17 @@ async def query_rag_chain(request: QueryRequest):
     vectorstore = Chroma(
         persist_directory="./chroma_db", embedding_function=embedding_model
     )
-    retriever = vectorstore.as_retriever()
-    prompt = ChatPromptTemplate.from_template(template)
+    prompt = PromptTemplate(template = template, input_variables=["context", "question"])
 
     rag_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=vectorstore.as_retriever(),
-        verbose=True,
-        return_source_documents=True,
+        llm = llm,
+        chain_type= "stuff",
+        retriever = vectorstore.as_retriever(search_kwargs = {"k":3}, max_tokens_limit=1024),
+        return_source_documents = False,
+        chain_type_kwargs= {'prompt': prompt}
     )
+
+    rag_chain = rag_chain | llm | vectorstore
 
     result = rag_chain.invoke({"query": request.query})
 
@@ -142,9 +144,10 @@ async def query_rag_chain(request: QueryRequest):
 
     # Format the answer to replace '\n' with actual newlines
     
-    answer = AnswerResponse(answer=result)
+    # answer = AnswerResponse(answer=result)
 
-    return {"answer": answer}
+    # return {"answer": answer}
+    return result
 
 
 if __name__ == "__main__":
